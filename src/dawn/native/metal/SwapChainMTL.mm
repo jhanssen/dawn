@@ -32,6 +32,7 @@
 #include "dawn/native/ChainUtils.h"
 #include "dawn/native/Surface.h"
 #include "dawn/native/metal/DeviceMTL.h"
+#include "dawn/native/metal/QueueMTL.h"
 #include "dawn/native/metal/TextureMTL.h"
 
 namespace dawn::native::metal {
@@ -91,7 +92,16 @@ MaybeError SwapChain::Initialize(SwapChainBase* previousSwapChain) {
 
 MaybeError SwapChain::PresentImpl() {
     DAWN_ASSERT(mCurrentDrawable != nullptr);
-    [*mCurrentDrawable present];
+
+    // Use presentDrawable: on a command buffer instead of [drawable present] directly.
+    // This ties presentation to command buffer completion on the Metal command queue,
+    // guaranteeing the drawable is only presented after all prior GPU work finishes.
+    // Using [drawable present] independently can race with GPU execution, causing
+    // intermittent flashes of the clear color.
+    Queue* queue = ToBackend(GetDevice()->GetQueue());
+    CommandRecordingContext* ctx = queue->GetPendingCommandContext(Queue::SubmitMode::Normal);
+    [ctx->GetCommands() presentDrawable:*mCurrentDrawable];
+    DAWN_TRY(queue->SubmitPendingCommandBuffer());
 
     mTexture->APIDestroy();
     mTexture = nullptr;
