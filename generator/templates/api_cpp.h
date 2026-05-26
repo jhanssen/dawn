@@ -776,6 +776,18 @@ struct CppFTraitsImpl<CppFT, R(C::*)(CppArgs...) const, T> {
     }(std::make_index_sequence<std::is_same_v<T, Untyped> ? NumCppArgs : NumCppArgs - 1>{})
     )::type;
 };
+// Specialization for non-const member function pointers (mutable lambdas).
+template <typename CppFT, typename R, typename C, typename... CppArgs, typename T>
+struct CppFTraitsImpl<CppFT, R(C::*)(CppArgs...), T> {
+    using PtrT = R(*)(CppArgs...);
+    static constexpr bool capturing = !std::is_convertible_v<CppFT, PtrT>;
+
+    static constexpr size_t NumCppArgs = sizeof...(CppArgs);
+    using BaseArgsTuple = typename decltype([]<std::size_t... Is>(std::index_sequence<Is...>) {
+        return std::type_identity<std::tuple<std::tuple_element_t<Is, std::tuple<CppArgs...>>...>>{};
+    }(std::make_index_sequence<std::is_same_v<T, Untyped> ? NumCppArgs : NumCppArgs - 1>{})
+    )::type;
+};
 template <typename CppFT, typename T = Untyped>
 struct CppFTraits : CppFTraitsImpl<CppFT, decltype(&CppFT::operator()), T> {};
 template <typename R, typename... CppArgs, typename T>
