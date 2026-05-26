@@ -29,6 +29,7 @@
 #define SRC_DAWN_COMMON_ITYP_ARRAY_H_
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <limits>
 #include <utility>
@@ -75,7 +76,16 @@ class array : private ::std::array<Value, Size> {
 
     constexpr Index size() const { return Index(static_cast<I>(Base::size())); }
 
-    constexpr bool operator==(const array<Index, Value, Size>& other) const = default;
+    constexpr bool operator==(const array<Index, Value, Size>& other) const
+        requires std::equality_comparable<Value>
+    {
+        for (size_t i = 0; i < Size; ++i) {
+            if (!(Base::operator[](i) == other.Base::operator[](i))) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 }  // namespace dawn::ityp
