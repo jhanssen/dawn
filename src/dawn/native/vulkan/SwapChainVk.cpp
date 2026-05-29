@@ -68,6 +68,22 @@ VkPresentModeKHR ToVulkanPresentMode(wgpu::PresentMode mode) {
     DAWN_UNREACHABLE();
 }
 
+VkCompositeAlphaFlagBitsKHR ToVulkanCompositeAlpha(wgpu::CompositeAlphaMode mode) {
+    switch (mode) {
+        case wgpu::CompositeAlphaMode::Opaque:
+            return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        case wgpu::CompositeAlphaMode::Premultiplied:
+            return VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+        case wgpu::CompositeAlphaMode::Unpremultiplied:
+            return VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
+        case wgpu::CompositeAlphaMode::Inherit:
+            return VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+        case wgpu::CompositeAlphaMode::Auto:
+            break;
+    }
+    DAWN_UNREACHABLE();
+}
+
 uint32_t MinImageCountForPresentMode(VkPresentModeKHR mode) {
     switch (mode) {
         case VK_PRESENT_MODE_FIFO_KHR:
@@ -302,26 +318,10 @@ ResultOrError<SwapChain::Config> SwapChain::ChooseConfig(
 
     config.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 
-    config.alphaMode = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-#if !DAWN_PLATFORM_IS(ANDROID)
+    config.alphaMode = ToVulkanCompositeAlpha(GetAlphaMode());
     DAWN_INVALID_IF(
-        (surfaceInfo.capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) == 0,
-        "Vulkan SwapChain must support opaque alpha.");
-#else
-    // TODO(dawn:286): investigate composite alpha for WebGPU native
-    VkCompositeAlphaFlagBitsKHR compositeAlphaFlags[4] = {
-        VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
-        VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
-        VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
-    };
-    for (uint32_t i = 0; i < 4; i++) {
-        if (surfaceInfo.capabilities.supportedCompositeAlpha & compositeAlphaFlags[i]) {
-            config.alphaMode = compositeAlphaFlags[i];
-            break;
-        }
-    }
-#endif  // #if !DAWN_PLATFORM_IS(ANDROID)
+        (surfaceInfo.capabilities.supportedCompositeAlpha & config.alphaMode) == 0,
+        "Vulkan SwapChain does not support composite alpha mode %s.", GetAlphaMode());
 
     // Choose the number of images for the swapchain= and clamp it to the min and max from the
     // surface capabilities. maxImageCount = 0 means there is no limit.
