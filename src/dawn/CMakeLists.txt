@@ -167,6 +167,38 @@ if (NOT EMSCRIPTEN)
 endif()
 
 ###############################################################################
+# webgpu_dawn_wire
+#   Self-contained wire-client bundle for embedders that drive Dawn over the
+#   wire from a separate process (e.g. a Node addon). Contains the wire
+#   client/server transport (dawn_wire) and the settable proc table (dawn_proc),
+#   with their absl/tint/common/partition_alloc dependencies folded in.
+#   Deliberately does NOT contain dawn_native: the consumer's wgpu* calls
+#   dispatch through the proc table (set via dawnProcSetProcs to
+#   dawn::wire::client::GetProcs()), not into a native implementation. Pairs
+#   with libwebgpu_dawn (native + wire server) running in the GPU process.
+###############################################################################
+
+if (NOT EMSCRIPTEN AND DAWN_BUILD_MONOLITHIC_LIBRARY)
+  find_package(Threads REQUIRED)
+  include(BundleLibraries)
+  string(TOUPPER "${DAWN_BUILD_MONOLITHIC_LIBRARY}" DAWN_WIRE_BUNDLE_LINK_TYPE)
+  bundle_libraries(webgpu_dawn_wire ${DAWN_WIRE_BUNDLE_LINK_TYPE} dawn_wire dawn_proc)
+  add_library(dawn::webgpu_dawn_wire ALIAS webgpu_dawn_wire)
+  set_target_properties(webgpu_dawn_wire PROPERTIES
+      INTERFACE_LINK_LIBRARIES "dawn_public_config")
+
+  set(webgpu_dawn_wire_public_headers)
+  foreach(dawn_target_name IN ITEMS dawn_headers dawncpp_headers dawn_wire dawn_proc)
+      get_target_property(headers "${dawn_target_name}" INTERFACE_SOURCES)
+      list(INSERT webgpu_dawn_wire_public_headers 0 "${headers}")
+  endforeach()
+  if (DAWN_ENABLE_INSTALL)
+      dawn_install_target(webgpu_dawn_wire
+          HEADERS ${webgpu_dawn_wire_public_headers})
+  endif ()
+endif()
+
+###############################################################################
 # Other generated files (upstream header, emscripten header, emscripten bits)
 ###############################################################################
 

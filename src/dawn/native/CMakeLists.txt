@@ -1029,6 +1029,7 @@ if (DAWN_BUILD_MONOLITHIC_LIBRARY)
         ${dawn_native_public_depends}
       PRIVATE_DEPENDS
         dawn::dawn_native_objects
+        dawn::dawn_wire
         ${conditional_private_platform_depends}
     )
 
@@ -1064,8 +1065,17 @@ if (DAWN_BUILD_MONOLITHIC_LIBRARY)
         ${conditional_private_platform_depends}
     )
 
+    # bundle_libraries() absorbs the object files of internal static/object
+    # targets (dawn_native_objects, dawn_wire, dawn_proc, absl, tint, ...) but
+    # CMake still records them as interface requirements, which makes
+    # install(EXPORT) demand they each be in an export set. Since their objects
+    # are already inside webgpu_dawn, force the interface link to only the
+    # public config so the export is self-contained.
+    set_target_properties(webgpu_dawn PROPERTIES
+        INTERFACE_LINK_LIBRARIES "dawn_public_config")
+
     set(webgpu_dawn_public_headers)
-    foreach(dawn_target_name IN ITEMS dawn_headers dawncpp_headers dawn_native_objects)
+    foreach(dawn_target_name IN ITEMS dawn_headers dawncpp_headers dawn_native_objects dawn_wire)
         get_target_property(headers "${dawn_target_name}" INTERFACE_SOURCES)
         list(INSERT webgpu_dawn_public_headers 0 "${headers}")
     endforeach()
