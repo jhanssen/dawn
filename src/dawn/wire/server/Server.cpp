@@ -62,6 +62,16 @@ Server::Server(const DawnProcTable& procs,
 }
 
 Server::~Server() {
+    // Release surfaces before destroying devices. A configured surface holds a
+    // swapchain backed by device-owned state (e.g. the Vulkan FencedDeleter).
+    // Destroying the device first (below, and in DestroyAllObjects) tears down
+    // that backend; the later swapchain detach in ~Surface would then touch
+    // freed device state and crash. Releasing the surfaces here runs ~Surface
+    // (which detaches the swapchain) while the devices are still alive. This is
+    // observable with injected, configured surfaces (e.g. a Wayland swapchain
+    // driven over the wire) where the client may not unconfigure before exit.
+    DestroyAllSurfaces();
+
     // Destroy all the devices to un-set the error and lost callbacks since we cannot forward
     // them after the server has been destroyed.
     for (WGPUDevice device : GetAllDeviceHandles()) {

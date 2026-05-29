@@ -101,6 +101,15 @@ namespace dawn::wire::server {
         std::vector<WGPUInstance> GetAllInstanceHandles() const {
             return std::get<KnownObjects<WGPUInstance>>(mKnown).GetAllHandles();
         }
+        // Release all surface objects (running their destructors, which detach
+        // any swapchain). Must be called while devices are still alive.
+        void DestroyAllSurfaces() {
+            std::vector<WGPUSurface> handles =
+                std::get<KnownObjects<WGPUSurface>>(mKnown).AcquireAllHandles();
+            for (WGPUSurface handle : handles) {
+                Release(handle);
+            }
+        }
 
         template <typename T>
         void Release(T handle) {
