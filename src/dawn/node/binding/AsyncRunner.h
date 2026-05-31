@@ -47,6 +47,10 @@ class AsyncRunner {
     // Creates an AsyncRunner to use to process events on the instance.
     static std::shared_ptr<AsyncRunner> Create(dawn::native::Instance* instance);
 
+    // Wire variant: process events on an already-created (e.g. wire-client)
+    // instance handle. Used by the host-provided-instance entry points.
+    static std::shared_ptr<AsyncRunner> Create(wgpu::Instance instance);
+
     // Begin() should be called when a new asynchronous task is started.
     // If the number of executing asynchronous tasks transitions from 0 to 1, then a function
     // will be scheduled on the main JavaScript thread to call wgpu::Device::Tick() whenever the
@@ -65,13 +69,13 @@ class AsyncRunner {
     void Reject(Napi::Env env, interop::Promise<void> promise, Napi::Error error);
 
     // Use AsyncRunner::Create instead of this constructor.
-    explicit AsyncRunner(dawn::native::Instance* instance);
+    explicit AsyncRunner(wgpu::Instance instance);
 
   private:
     void ScheduleProcessEvents(Napi::Env env);
 
     std::weak_ptr<AsyncRunner> weak_this_;
-    const dawn::native::Instance* const instance_;
+    const wgpu::Instance instance_;
     uint64_t tasks_waiting_ = 0;
     bool process_events_queued_ = false;
 };
