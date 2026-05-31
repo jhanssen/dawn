@@ -34,12 +34,17 @@ namespace wgpu::binding {
 
 // static
 std::shared_ptr<AsyncRunner> AsyncRunner::Create(dawn::native::Instance* instance) {
-    auto runner = std::make_shared<AsyncRunner>(instance);
+    return Create(wgpu::Instance(instance->Get()));
+}
+
+// static
+std::shared_ptr<AsyncRunner> AsyncRunner::Create(wgpu::Instance instance) {
+    auto runner = std::make_shared<AsyncRunner>(std::move(instance));
     runner->weak_this_ = runner;
     return runner;
 }
 
-AsyncRunner::AsyncRunner(dawn::native::Instance* instance) : instance_(instance) {}
+AsyncRunner::AsyncRunner(wgpu::Instance instance) : instance_(std::move(instance)) {}
 
 void AsyncRunner::Begin(Napi::Env env) {
     assert(tasks_waiting_ != std::numeric_limits<decltype(tasks_waiting_)>::max());
@@ -78,7 +83,7 @@ void AsyncRunner::ScheduleProcessEvents(Napi::Env env) {
                                     }
 
                                     self->process_events_queued_ = false;
-                                    wgpuInstanceProcessEvents(self->instance_->Get());
+                                    wgpuInstanceProcessEvents(self->instance_.Get());
                                     self->ScheduleProcessEvents(env);
                                 }),
         });

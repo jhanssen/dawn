@@ -64,6 +64,10 @@ class GPUDevice final : public interop::GPUDevice, EventTarget {
 
     void ForceLoss(wgpu::DeviceLostReason reason, const char* message);
 
+    // Mark this device as borrowed (owned by the host application); the
+    // destructor will not Destroy() it. Used by the wrapDevice entry point.
+    void SetBorrowed() { owns_device_ = false; }
+
     // interop::GPUDevice interface compliance
     interop::Interface<interop::GPUSupportedFeatures> getFeatures(Napi::Env) override;
     interop::Interface<interop::GPUSupportedLimits> getLimits(Napi::Env) override;
@@ -144,6 +148,9 @@ class GPUDevice final : public interop::GPUDevice, EventTarget {
     std::string label_;
 
     bool destroyed_ = false;
+    // When false, this GPUDevice wraps a device owned elsewhere (host
+    // application, via wrapDevice); its destructor must not Destroy() it.
+    bool owns_device_ = true;
 };
 
 }  // namespace wgpu::binding

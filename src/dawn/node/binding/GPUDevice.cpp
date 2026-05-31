@@ -220,7 +220,9 @@ GPUDevice::~GPUDevice() {
     // process, which is not a good idea.
     if (!destroyed_) {
         lost_promise_.Discard();
-        device_.Destroy();
+        if (owns_device_) {
+            device_.Destroy();
+        }
         destroyed_ = true;
     }
     {

@@ -108,6 +108,7 @@ target_link_libraries(dawn_node
     PRIVATE
         dawncpp
         dawn_native
+        dawn_wire
         dawn_node_binding
         dawn_node_interop
         dawn_proc
@@ -183,6 +184,14 @@ else()
     if (APPLE)
         target_link_options(dawn_node PRIVATE "-Wl,-undefined,dynamic_lookup")
     endif()
+endif()
+
+# Hide symbols pulled in from static archives (abseil, tint, etc.) so they do
+# not interpose with the same-named symbols bundled inside Node/V8 (e.g. V8's
+# own abseil), which corrupts shared hash-table state at load time. dawn.node
+# then uses its own copies internally.
+if (UNIX AND NOT APPLE)
+    target_link_options(dawn_node PRIVATE "-Wl,--exclude-libs,ALL")
 endif()
 
 macro(javascript file)
