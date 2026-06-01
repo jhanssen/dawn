@@ -59,7 +59,13 @@ SharedFenceBase::SharedFenceBase(DeviceBase* device,
     : ApiObjectBase(device, tag, descriptor->label) {}
 
 SharedFenceBase::SharedFenceBase(DeviceBase* device, StringView label)
-    : ApiObjectBase(device, label) {}
+    : ApiObjectBase(device, label) {
+    // Track the fence in the device's object list. Without this, Untrack() returns
+    // false when the last ref drops, so DestroyImpl() never runs and the imported
+    // sync-fd (SharedFenceVk::mHandle) leaks. Every other ApiObject (textures, STMs,
+    // ...) tracks itself the same way in its constructor; SharedFence was missing it.
+    GetObjectTrackingList()->Track(this);
+}
 
 ObjectType SharedFenceBase::GetType() const {
     return ObjectType::SharedFence;
