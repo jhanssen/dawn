@@ -458,10 +458,42 @@ ResultOrError<Ref<SharedTextureMemory>> SharedTextureMemory::Create(
     importMemoryFdInfo.handleType = handleType;
     importMemoryFdInfo.fd = memoryFD.Get();
 
+    // Query whether the image's memory requirements demand or prefer a dedicated
+    // allocation. NVIDIA's proprietary driver reports
+    // prefersDedicatedAllocation=true for tiled-modifier dmabuf images; without
+    // a VkMemoryDedicatedAllocateInfo on the AllocateMemory call the driver
+    // succeeds but binds the image to generic memory instead of the dmabuf-
+    // backed memory, so the subsequent vkBindImageMemory points the image at
+    // memory that does not contain the producer's pixels. Observable as
+    // sometimes-transparent samples from kitty's NVIDIA dmabufs.
+    VkMemoryDedicatedRequirements dedicatedRequirements{};
+    dedicatedRequirements.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+    VkMemoryRequirements2 memoryRequirements2{};
+    memoryRequirements2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+    memoryRequirements2.pNext = &dedicatedRequirements;
+    VkImageMemoryRequirementsInfo2 imageMemoryRequirementsInfo{};
+    imageMemoryRequirementsInfo.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+    imageMemoryRequirementsInfo.image = sharedTextureMemory->mVkImage->Get();
+    device->fn.GetImageMemoryRequirements2(vkDevice, &imageMemoryRequirementsInfo,
+                                           &memoryRequirements2);
+    const bool needsDedicatedAllocation =
+        dedicatedRequirements.requiresDedicatedAllocation ||
+        dedicatedRequirements.prefersDedicatedAllocation;
+
+    VkMemoryDedicatedAllocateInfo dedicatedAllocateInfo{};
+    dedicatedAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+    dedicatedAllocateInfo.image = sharedTextureMemory->mVkImage->Get();
+
     // Import the fd as VkDeviceMemory
     VkDeviceMemory vkDeviceMemory;
-    DAWN_TRY_ASSIGN(vkDeviceMemory,
-                    AllocateDeviceMemory(device, &memoryAllocateInfo, &importMemoryFdInfo));
+    if (needsDedicatedAllocation) {
+        DAWN_TRY_ASSIGN(vkDeviceMemory,
+                        AllocateDeviceMemory(device, &memoryAllocateInfo, &importMemoryFdInfo,
+                                             &dedicatedAllocateInfo));
+    } else {
+        DAWN_TRY_ASSIGN(vkDeviceMemory,
+                        AllocateDeviceMemory(device, &memoryAllocateInfo, &importMemoryFdInfo));
+    }
 
     memoryFD.Detach();  // Ownership transfered to the VkDeviceMemory.
     sharedTextureMemory->mVkDeviceMemory =
