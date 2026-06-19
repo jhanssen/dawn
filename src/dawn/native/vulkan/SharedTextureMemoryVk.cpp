@@ -308,6 +308,7 @@ class SharedTextureMemory::ImageImporter : public StackAllocated, NonMovable {
     struct ImportMemoryRequirements {
         VkDeviceSize allocationSize;
         uint32_t memoryTypeIndex;
+        bool dedicatedAllocation = false;
     };
 
     virtual ResultOrUnknownError<ImportProperties> ValidateDescriptorAndMakeProperties() = 0;
@@ -538,9 +539,20 @@ struct SharedTextureMemory::DmaBufImporter final : ImageImporter {
             device->fn.GetMemoryFdPropertiesKHR(vkDevice, handleType, fd, &fdProperties),
             "vkGetMemoryFdPropertiesKHR"));
 
-        // Get the valid memory types for the VkImage.
-        VkMemoryRequirements memoryRequirements;
-        device->fn.GetImageMemoryRequirements(vkDevice, image, &memoryRequirements);
+        // Get the valid memory types for the VkImage, and whether the driver wants a dedicated
+        // allocation for it (e.g. NVIDIA with tiled DRM modifiers). Without one the import can
+        // succeed but bind the image to memory that doesn't hold the dmabuf's contents.
+        VkMemoryDedicatedRequirements dedicatedRequirements = {};
+        dedicatedRequirements.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+        VkMemoryRequirements2 memoryRequirements2 = {};
+        memoryRequirements2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+        memoryRequirements2.pNext = &dedicatedRequirements;
+        VkImageMemoryRequirementsInfo2 imageRequirementsInfo = {};
+        imageRequirementsInfo.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+        imageRequirementsInfo.image = image;
+        device->fn.GetImageMemoryRequirements2(vkDevice, &imageRequirementsInfo,
+                                               &memoryRequirements2);
+        VkMemoryRequirements& memoryRequirements = memoryRequirements2.memoryRequirements;
 
         // Choose the best memory type that satisfies both the image's constraint and the
         // import's constraint.
@@ -552,14 +564,18 @@ struct SharedTextureMemory::DmaBufImporter final : ImageImporter {
         DAWN_TRY_ASSIGN(memoryTypeIndex,
                         FindImportMemoryType(device, memoryRequirements, /*allowHostCached=*/true));
 
-        return ImportMemoryRequirements{memoryRequirements.size, memoryTypeIndex};
+        // The spec requires prefersDedicatedAllocation to be set whenever
+        // requiresDedicatedAllocation is.
+        return ImportMemoryRequirements{memoryRequirements.size, memoryTypeIndex,
+                                        dedicatedRequirements.prefersDedicatedAllocation != 0u};
     }
 
     ResultOrError<Ref<RefCountedVkHandle<VkDeviceMemory>>> ImportMemory(
         VkImage image,
         const ImportMemoryRequirements& requirements) override {
         return ImportMemoryFD(device, fd, handleType, requirements.allocationSize,
-                              requirements.memoryTypeIndex);
+                              requirements.memoryTypeIndex,
+                              requirements.dedicatedAllocation ? image : VkImage{});
     }
 
     const SharedTextureMemoryDmaBufDescriptor* const descriptor;
