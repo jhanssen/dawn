@@ -69,24 +69,28 @@ void AsyncRunner::ScheduleProcessEvents(Napi::Env env) {
     }
     process_events_queued_ = true;
 
-    auto weak_self = weak_this_;
-    env.Global()
-        .Get("setImmediate")
-        .As<Napi::Function>()
-        .Call({
-            // TODO(crbug.com/dawn/1127): Create once, reuse.
-            Napi::Function::New(env,
-                                [weak_self, env](const Napi::CallbackInfo&) {
-                                    auto self = weak_self.lock();
-                                    if (self == nullptr) {
-                                        return;
-                                    }
+    // This is a self-rescheduling loop that runs on every event-loop iteration
+    // for as long as any async task is outstanding. Create the process-events
+    // callback and resolve setImmediate once, then reuse them; minting a fresh
+    // Napi::Function (and re-resolving the global) on every iteration otherwise
+    // dominates CPU (V8 function instantiation + the GC of each closure).
+    if (process_events_callback_.IsEmpty()) {
+        auto weak_self = weak_this_;
+        process_events_callback_ = Napi::Persistent(Napi::Function::New(
+            env, [weak_self, env](const Napi::CallbackInfo&) {
+                auto self = weak_self.lock();
+                if (self == nullptr) {
+                    return;
+                }
 
-                                    self->process_events_queued_ = false;
-                                    wgpuInstanceProcessEvents(self->instance_.Get());
-                                    self->ScheduleProcessEvents(env);
-                                }),
-        });
+                self->process_events_queued_ = false;
+                wgpuInstanceProcessEvents(self->instance_.Get());
+                self->ScheduleProcessEvents(env);
+            }));
+        set_immediate_ = Napi::Persistent(env.Global().Get("setImmediate").As<Napi::Function>());
+    }
+
+    set_immediate_.Call({process_events_callback_.Value()});
 }
 
 void AsyncRunner::Reject(Napi::Env env, interop::Promise<void> promise, Napi::Error error) {

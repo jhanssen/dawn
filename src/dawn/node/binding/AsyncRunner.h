@@ -78,6 +78,10 @@ class AsyncRunner {
     const wgpu::Instance instance_;
     uint64_t tasks_waiting_ = 0;
     bool process_events_queued_ = false;
+    // Created once on the first schedule and reused: the process-events callback
+    // passed to setImmediate, and the resolved setImmediate function itself.
+    Napi::FunctionReference process_events_callback_;
+    Napi::FunctionReference set_immediate_;
 };
 
 // AsyncTask is a RAII helper for calling AsyncRunner::Begin() on construction, and
