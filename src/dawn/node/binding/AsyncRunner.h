@@ -49,7 +49,12 @@ class AsyncRunner {
 
     // Wire variant: process events on an already-created (e.g. wire-client)
     // instance handle. Used by the host-provided-instance entry points.
-    static std::shared_ptr<AsyncRunner> Create(wgpu::Instance instance);
+    // When hostDriven is true, the AsyncRunner does NOT schedule its own
+    // setImmediate event pump: the embedder is expected to drive
+    // wgpuInstanceProcessEvents() on this instance (e.g. from its own wire
+    // readability poll), so self-pumping would be redundant busy-work that
+    // keeps the event loop from ever sleeping.
+    static std::shared_ptr<AsyncRunner> Create(wgpu::Instance instance, bool hostDriven = false);
 
     // Begin() should be called when a new asynchronous task is started.
     // If the number of executing asynchronous tasks transitions from 0 to 1, then a function
@@ -78,6 +83,9 @@ class AsyncRunner {
     const wgpu::Instance instance_;
     uint64_t tasks_waiting_ = 0;
     bool process_events_queued_ = false;
+    // When true, the embedder drives wgpuInstanceProcessEvents() on instance_;
+    // ScheduleProcessEvents is a no-op (no setImmediate pump).
+    bool host_driven_ = false;
     // Created once on the first schedule and reused: the process-events callback
     // passed to setImmediate, and the resolved setImmediate function itself.
     Napi::FunctionReference process_events_callback_;

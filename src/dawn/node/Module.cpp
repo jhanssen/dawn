@@ -105,7 +105,9 @@ Napi::Value WrapDevice(const Napi::CallbackInfo& info) {
     wgpu::Instance instance = wgpu::Instance::Acquire(rawInst);
     wgpu::Device device = wgpu::Device::Acquire(rawDev);
 
-    auto async = wgpu::binding::AsyncRunner::Create(instance);
+    // Host-driven: overdraw drives wgpuInstanceProcessEvents() on this instance
+    // from its wire-readability poll, so the AsyncRunner must not self-pump.
+    auto async = wgpu::binding::AsyncRunner::Create(instance, /*hostDriven=*/true);
 
     // The device was created by the host; we cannot install a device-lost
     // callback after the fact. The lost promise stays pending (Discarded on

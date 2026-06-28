@@ -38,9 +38,10 @@ std::shared_ptr<AsyncRunner> AsyncRunner::Create(dawn::native::Instance* instanc
 }
 
 // static
-std::shared_ptr<AsyncRunner> AsyncRunner::Create(wgpu::Instance instance) {
+std::shared_ptr<AsyncRunner> AsyncRunner::Create(wgpu::Instance instance, bool hostDriven) {
     auto runner = std::make_shared<AsyncRunner>(std::move(instance));
     runner->weak_this_ = runner;
+    runner->host_driven_ = hostDriven;
     return runner;
 }
 
@@ -59,6 +60,12 @@ void AsyncRunner::End() {
 }
 
 void AsyncRunner::ScheduleProcessEvents(Napi::Env env) {
+    // Host-driven: the embedder pumps wgpuInstanceProcessEvents() on this
+    // instance (e.g. from its wire-readability poll), so a self-scheduled
+    // setImmediate pump would just spin the event loop redundantly.
+    if (host_driven_) {
+        return;
+    }
     // TODO(crbug.com/dawn/1127): We probably want to reduce the frequency at which this gets
     // called.
     if (process_events_queued_) {
