@@ -1735,9 +1735,24 @@ void ImportedTextureBase::TweakTransition(CommandRecordingContext* recordingCont
         mExternalState == ExternalState::EagerlyTransitioned) {
         recordingContext->specialSyncTextures.insert(this);
         if (barriers->size() == transitionBarrierStart) {
-            barriers->push_back(BuildMemoryBarrier(
-                this, wgpu::TextureUsage::None, wgpu::TextureUsage::None,
-                SubresourceRange::SingleMipAndLayer(0, 0, GetDisjointVulkanAspects())));
+            // A same-usage re-acquire produced no usage barrier; synthesize one
+            // from the subresource's LAST usage (not TextureUsage::None) so the
+            // desiredLayout captured below is the layout the sync tracker
+            // believes the texture holds -- with None it would be UNDEFINED,
+            // and the transition-to-desired barrier below would target
+            // UNDEFINED (VUID-VkImageMemoryBarrier-newLayout-01198). Access
+            // masks stay 0: this is a queue transfer (ordering comes from the
+            // semaphore wait), and the batch's stage masks -- accumulated from
+            // the other textures' transitions -- need not cover this usage's
+            // access bits (VUID-vkCmdPipelineBarrier-pImageMemoryBarriers-02820).
+            const TextureSyncInfo lastSyncInfo =
+                mSubresourceLastSyncInfos.Get(GetDisjointVulkanAspects(), 0, 0);
+            VkImageMemoryBarrier syntheticBarrier = BuildMemoryBarrier(
+                this, lastSyncInfo.usage, lastSyncInfo.usage,
+                SubresourceRange::SingleMipAndLayer(0, 0, GetDisjointVulkanAspects()));
+            syntheticBarrier.srcAccessMask = 0;
+            syntheticBarrier.dstAccessMask = 0;
+            barriers->push_back(syntheticBarrier);
         }
 
         VkImageMemoryBarrier* barrier = &(*barriers)[transitionBarrierStart];
@@ -1782,7 +1797,13 @@ void ImportedTextureBase::TweakTransition(CommandRecordingContext* recordingCont
         }
 
         // If these are unequal, we need an another barrier to transition the layout.
-        if (barrier->newLayout != desiredLayout) {
+        // desiredLayout == UNDEFINED means the pending usage imposes no layout
+        // requirement (a same-usage re-acquire generates no usage barrier, so the
+        // placeholder barrier above maps wgpu::TextureUsage::None to UNDEFINED).
+        // Transitioning TO UNDEFINED is invalid
+        // (VUID-VkImageMemoryBarrier-newLayout-01198); the acquired layout already
+        // satisfies "no requirement", so skip the extra barrier.
+        if (barrier->newLayout != desiredLayout && desiredLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
             VkImageMemoryBarrier layoutBarrier;
             layoutBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             layoutBarrier.pNext = nullptr;
