@@ -29,6 +29,9 @@
 #   --tag <tag>        release tag (default: v<YYYYMMDD>-linux-wayland-wire-alpha)
 #   --jobs <N>         ninja parallelism (default: nproc)
 #   --build-dir <dir>  build directory (default: out/wire-release)
+#   --emsdk <dir>      emsdk root for the emdawnwebgpu package (default:
+#                      $EMSDK if set, else ~/dev/emsdk)
+#   --skip-wasm        don't build/upload the emdawnwebgpu port package
 #   -h, --help         show this help
 
 set -euo pipefail
@@ -45,6 +48,8 @@ BUILD_DIR="out/wire-release"
 JOBS="$(nproc)"
 WANT_NODE=0
 WANT_PUBLISH=0
+WANT_WASM=1
+EMSDK_DIR="${EMSDK:-$HOME/dev/emsdk}"
 RELEASE_REPO="jhanssen/dawn"
 TAG=""
 
@@ -56,6 +61,8 @@ while [[ $# -gt 0 ]]; do
     --tag) TAG="$2"; shift 2 ;;
     --jobs) JOBS="$2"; shift 2 ;;
     --build-dir) BUILD_DIR="$2"; shift 2 ;;
+    --emsdk) EMSDK_DIR="$2"; shift 2 ;;
+    --skip-wasm) WANT_WASM=0; shift ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -74,6 +81,12 @@ RELEASE_NAME="Dawn-${COMMIT}-${PLATFORM}-${BUILD_TYPE}"
 STAGING="${BUILD_DIR}/${RELEASE_NAME}"
 TARBALL="${BUILD_DIR}/${RELEASE_NAME}.tar.gz"
 
+# emdawnwebgpu: platform-independent (text-only) Emscripten port package,
+# built from the same commit so webgpu_cpp.h matches the native bundle.
+WASM_BUILD_DIR="${BUILD_DIR}-wasm"
+WASM_NAME="emdawnwebgpu_pkg-${COMMIT}"
+WASM_TARBALL="${WASM_BUILD_DIR}/${WASM_NAME}.tar.gz"
+
 # --- preflight ----------------------------------------------------------------
 log "Repo:    $REPO_ROOT"
 log "Branch:  $(git rev-parse --abbrev-ref HEAD) @ $SHORT"
@@ -85,6 +98,8 @@ command -v ninja >/dev/null  || die "ninja not found"
 command -v go    >/dev/null  || die "go not found (required by idlgen)"
 [[ $WANT_NODE -eq 1 ]] && { command -v node >/dev/null || die "node not found (--node)"; }
 [[ $WANT_PUBLISH -eq 1 ]] && { command -v gh >/dev/null || die "gh not found (--publish)"; }
+[[ $WANT_WASM -eq 1 ]] && { [[ -f "$EMSDK_DIR/emsdk_env.sh" ]] || \
+  die "emsdk not found at $EMSDK_DIR (--emsdk <dir> or --skip-wasm)"; }
 
 # --- ensure gpuweb is at the DEPS-pinned commit -------------------------------
 # fetch_dawn_dependencies.py does not manage third_party/gpuweb. If it is at the
@@ -162,6 +177,22 @@ log "Creating tarball"
 ( cd "$BUILD_DIR" && tar czf "${RELEASE_NAME}.tar.gz" "$RELEASE_NAME" )
 ls -lh "$TARBALL"
 
+# --- emdawnwebgpu package (wasm) -----------------------------------------------
+if [[ $WANT_WASM -eq 1 ]]; then
+  log "Building emdawnwebgpu_pkg ($WASM_BUILD_DIR)"
+  # shellcheck disable=SC1091
+  source "$EMSDK_DIR/emsdk_env.sh" >/dev/null 2>&1
+  emcmake cmake -S . -B "$WASM_BUILD_DIR" -GNinja -DCMAKE_BUILD_TYPE=Release
+  ninja -C "$WASM_BUILD_DIR" -j "$JOBS" emdawnwebgpu_pkg
+  [[ -f "$WASM_BUILD_DIR/emdawnwebgpu_pkg/emdawnwebgpu.port.py" ]] \
+    || die "emdawnwebgpu.port.py missing from package"
+  log "Creating emdawnwebgpu tarball"
+  rm -rf "$WASM_BUILD_DIR/$WASM_NAME"
+  cp -a "$WASM_BUILD_DIR/emdawnwebgpu_pkg" "$WASM_BUILD_DIR/$WASM_NAME"
+  ( cd "$WASM_BUILD_DIR" && tar czf "${WASM_NAME}.tar.gz" "$WASM_NAME" )
+  ls -lh "$WASM_TARBALL"
+fi
+
 # --- publish ------------------------------------------------------------------
 if [[ $WANT_PUBLISH -eq 1 ]]; then
   log "Publishing release $TAG to $RELEASE_REPO"
@@ -178,16 +209,24 @@ Consume via \`find_package(Dawn)\`; link \`dawn::webgpu_dawn\` (GPU process) or
 \`dawn::webgpu_dawn_wire\` (wire client). Wire client consumers must build with
 \`-fno-rtti\` to match Dawn (only vtables, not typeinfo, are emitted for the
 wire transport classes).
+
+\`emdawnwebgpu_pkg-<commit>.tar.gz\` is the Emscripten port package (text-only,
+platform-independent) built from the same commit: pass
+\`--use-port=<pkg>/emdawnwebgpu.port.py\` to emcc at compile and link.
 EOF
 )"
-  gh release create "$TAG" "$TARBALL" \
+  RELEASE_ASSETS=( "$TARBALL" )
+  [[ $WANT_WASM -eq 1 ]] && RELEASE_ASSETS+=( "$WASM_TARBALL" )
+  gh release create "$TAG" "${RELEASE_ASSETS[@]}" \
     --repo "$RELEASE_REPO" \
     --title "$TITLE" \
     --notes "$NOTES"
   log "Published: https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 else
-  log "Built tarball only. To publish:"
-  echo "  gh release create $TAG \"$TARBALL\" --repo $RELEASE_REPO --title '...' --notes '...'"
+  log "Built tarball(s) only. To publish:"
+  ASSETS="\"$TARBALL\""
+  [[ $WANT_WASM -eq 1 ]] && ASSETS+=" \"$WASM_TARBALL\""
+  echo "  gh release create $TAG $ASSETS --repo $RELEASE_REPO --title '...' --notes '...'"
   echo "  (or re-run with --publish)"
 fi
 
