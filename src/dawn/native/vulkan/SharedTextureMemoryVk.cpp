@@ -70,6 +70,8 @@ constexpr uint32_t DrmFourccCode(char a, char b, char c, char d) {
 constexpr auto kDrmFormatR8 = DrmFourccCode('R', '8', ' ', ' '); /* [7:0] R */
 constexpr auto kDrmFormatGR88 =
     DrmFourccCode('G', 'R', '8', '8'); /* [15:0] G:R 8:8 little endian */
+constexpr auto kDrmFormatRG88 =
+    DrmFourccCode('R', 'G', '8', '8'); /* [15:0] R:G 8:8 little endian */
 constexpr auto kDrmFormatXRGB8888 =
     DrmFourccCode('X', 'R', '2', '4'); /* [15:0] x:R:G:B 8:8:8:8 little endian */
 constexpr auto kDrmFormatXBGR8888 =
@@ -89,6 +91,7 @@ ResultOrError<wgpu::TextureFormat> FormatFromDrmFormat(uint32_t drmFormat) {
         case kDrmFormatR8:
             return wgpu::TextureFormat::R8Unorm;
         case kDrmFormatGR88:
+        case kDrmFormatRG88:
             return wgpu::TextureFormat::RG8Unorm;
         case kDrmFormatXRGB8888:
         case kDrmFormatARGB8888:
