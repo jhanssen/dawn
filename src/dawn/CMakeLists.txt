@@ -250,8 +250,10 @@ if (NOT EMSCRIPTEN AND DAWN_BUILD_MONOLITHIC_LIBRARY)
   string(TOUPPER "${DAWN_BUILD_MONOLITHIC_LIBRARY}" DAWN_WIRE_BUNDLE_LINK_TYPE)
   bundle_libraries(webgpu_dawn_wire ${DAWN_WIRE_BUNDLE_LINK_TYPE} dawn_wire dawn_proc)
   add_library(dawn::webgpu_dawn_wire ALIAS webgpu_dawn_wire)
-  set_target_properties(webgpu_dawn_wire PROPERTIES
-      INTERFACE_LINK_LIBRARIES "dawn_public_config")
+  target_link_libraries(webgpu_dawn_wire PUBLIC dawn_public_config)
+  # Keep the system libraries / frameworks (e.g. CoreFoundation for absl) that
+  # the static archive needs, but not the absorbed internal targets.
+  bundle_libraries_strip_absorbed_targets(webgpu_dawn_wire)
 
   set(webgpu_dawn_wire_public_headers)
   foreach(dawn_target_name IN ITEMS dawn_headers dawncpp_headers dawn_wire dawn_proc)

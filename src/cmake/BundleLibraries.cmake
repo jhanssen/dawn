@@ -131,3 +131,45 @@ function(bundle_libraries output_target library_type)
     target_link_libraries(${output_target} PRIVATE ${all_non_target_libs})
   endif()
 endfunction()
+
+# bundle_libraries_strip_absorbed_targets(<target>)
+#
+# A bundled static library's INTERFACE_LINK_LIBRARIES can still name the
+# internal CMake targets whose object files were folded into it, which makes
+# install(EXPORT) demand that each of them be exported too. Their objects are
+# already inside the bundle, so drop them from the interface. Everything else
+# is kept, because consumers of the static bundle still have to link it:
+#   - non-target entries: system libraries, linker flags and generator
+#     expressions (e.g. "-framework Metal", "dl", absl's
+#     $<LINK_ONLY:$<$<PLATFORM_ID:Darwin>:-Wl,-framework,CoreFoundation>>)
+#   - IMPORTED targets such as Threads::Threads (the package config must
+#     find_dependency() them)
+# Both plain "tgt" and "$<LINK_ONLY:tgt>" entries are checked.
+function(bundle_libraries_strip_absorbed_targets target)
+  get_target_property(interface_libs ${target} INTERFACE_LINK_LIBRARIES)
+  if(NOT interface_libs)
+    return()
+  endif()
+  set(kept "")
+  foreach(entry IN LISTS interface_libs)
+    set(name "${entry}")
+    if(name MATCHES "^\\$<LINK_ONLY:([^<>$]+)>$")
+      set(name "${CMAKE_MATCH_1}")
+    endif()
+    if(TARGET "${name}")
+      get_target_property(aliased "${name}" ALIASED_TARGET)
+      if(aliased)
+        set(name "${aliased}")
+      endif()
+      get_target_property(imported "${name}" IMPORTED)
+      get_target_property(type "${name}" TYPE)
+      # Keep imported targets and interface-only targets (e.g. the public
+      # config, which is exported alongside the bundle); drop absorbed ones.
+      if(NOT imported AND NOT type STREQUAL "INTERFACE_LIBRARY")
+        continue()
+      endif()
+    endif()
+    list(APPEND kept "${entry}")
+  endforeach()
+  set_target_properties(${target} PROPERTIES INTERFACE_LINK_LIBRARIES "${kept}")
+endfunction()
