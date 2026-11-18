@@ -2,8 +2,9 @@
 #
 # build-wire-release.sh
 #
-# Build a wire-enabled Dawn binary release tarball for Linux/Wayland and
-# (optionally) publish it to github.com/jhanssen/dawn via `gh release`.
+# Build a wire-enabled Dawn binary release tarball for Linux/Wayland (Vulkan)
+# or macOS (Metal) and (optionally) publish it to github.com/jhanssen/dawn via
+# `gh release`.
 #
 # Produces a monolithic static install containing:
 #   - libwebgpu_dawn.a       native Dawn + wire SERVER (GPU process side)
@@ -25,9 +26,10 @@
 #
 # OPTIONS:
 #   --node             also build dawn.node and include it in the tarball
-#   --publish          create a GitHub release on jhanssen/dawn and upload
+#   --publish          upload the tarball to the GitHub release <tag> on
+#                      jhanssen/dawn (creates the release if it doesn't exist)
 #   --tag <tag>        release tag (default: v<YYYYMMDD>-linux-wayland-wire-alpha)
-#   --jobs <N>         ninja parallelism (default: nproc)
+#   --jobs <N>         ninja parallelism (default: number of CPUs)
 #   --build-dir <dir>  build directory (default: out/wire-release)
 #   -h, --help         show this help
 
@@ -38,11 +40,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+# --- platform detection -------------------------------------------------------
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+case "$OS" in
+  Linux)
+    PLATFORM="linux-${ARCH}-wayland"
+    PLATFORM_DESC="Linux ${ARCH} Wayland"
+    NCPU="$(nproc)"
+    # Vulkan backend with Wayland + X11 surface support.
+    PLATFORM_CMAKE_ARGS=( -DDAWN_ENABLE_VULKAN=ON -DDAWN_USE_WAYLAND=ON -DDAWN_USE_X11=ON )
+    ;;
+  Darwin)
+    PLATFORM="macos-${ARCH}"
+    PLATFORM_DESC="macOS ${ARCH} (Metal)"
+    NCPU="$(sysctl -n hw.ncpu)"
+    # Metal is Dawn's default backend on macOS; no extra backend flags.
+    PLATFORM_CMAKE_ARGS=()
+    ;;
+  *) echo "unsupported OS: $OS" >&2; exit 1 ;;
+esac
+
 # --- defaults -----------------------------------------------------------------
-PLATFORM="linux-x86_64-wayland"
 BUILD_TYPE="Release"
 BUILD_DIR="out/wire-release"
-JOBS="$(nproc)"
+JOBS="$NCPU"
 WANT_NODE=0
 WANT_PUBLISH=0
 RELEASE_REPO="jhanssen/dawn"
@@ -77,6 +99,7 @@ TARBALL="${BUILD_DIR}/${RELEASE_NAME}.tar.gz"
 # --- preflight ----------------------------------------------------------------
 log "Repo:    $REPO_ROOT"
 log "Branch:  $(git rev-parse --abbrev-ref HEAD) @ $SHORT"
+log "Platform: $PLATFORM_DESC"
 log "Tag:     $TAG"
 log "Tarball: $TARBALL"
 
@@ -86,19 +109,34 @@ command -v go    >/dev/null  || die "go not found (required by idlgen)"
 [[ $WANT_NODE -eq 1 ]] && { command -v node >/dev/null || die "node not found (--node)"; }
 [[ $WANT_PUBLISH -eq 1 ]] && { command -v gh >/dev/null || die "gh not found (--publish)"; }
 
-# --- ensure gpuweb is at the DEPS-pinned commit -------------------------------
-# fetch_dawn_dependencies.py does not manage third_party/gpuweb. If it is at the
-# wrong revision, idlgen produces interop types that mismatch the binding code.
-GPUWEB_PIN="$(grep -A2 "'third_party/gpuweb'" DEPS | grep -o 'gpuweb@[a-f0-9]*' | cut -d@ -f2)"
-[[ -n "$GPUWEB_PIN" ]] || die "could not read gpuweb pin from DEPS"
-if CUR_GPUWEB="$(git -C third_party/gpuweb rev-parse HEAD 2>/dev/null)"; then
-  if [[ "$CUR_GPUWEB" != "$GPUWEB_PIN" ]]; then
-    log "Pinning gpuweb to $GPUWEB_PIN (was $CUR_GPUWEB)"
-    git -C third_party/gpuweb fetch origin "$GPUWEB_PIN" --depth 1
-    git -C third_party/gpuweb checkout "$GPUWEB_PIN"
+# --- ensure dawn.node deps are at their DEPS-pinned commits -------------------
+# fetch_dawn_dependencies.py does not manage the dawn_node-conditional deps
+# (gpuweb, node-api-headers, node-addon-api). If they are missing, configure
+# fails; if gpuweb is at the wrong revision, idlgen produces interop types that
+# mismatch the binding code. So for --node, init/pin them here.
+# Note: test for <dir>/.git rather than just running `git -C <dir> rev-parse`,
+# because for an uninitialized (empty) submodule dir git walks up and silently
+# reports the *Dawn* repo's HEAD.
+ensure_dep_pinned() {  # <path relative to repo root>
+  local dir="$1" pin cur
+  pin="$(grep -A2 "'$dir'" DEPS | grep -o '@[a-f0-9]\{40\}' | head -1 | cut -c2-)"
+  [[ -n "$pin" ]] || die "could not read $dir pin from DEPS"
+  if [[ ! -e "$dir/.git" ]]; then
+    log "Initializing $dir submodule"
+    git submodule update --init --depth 1 "$dir" || die "failed to initialize $dir"
   fi
-else
-  die "third_party/gpuweb not present; run: python3 tools/fetch_dawn_dependencies.py"
+  cur="$(git -C "$dir" rev-parse HEAD)"
+  if [[ "$cur" != "$pin" ]]; then
+    log "Pinning $dir to $pin (was $cur)"
+    git -C "$dir" fetch origin "$pin" --depth 1
+    git -C "$dir" checkout "$pin"
+  fi
+  [[ "$(git -C "$dir" rev-parse HEAD)" == "$pin" ]] || die "$dir is not at the DEPS pin $pin"
+}
+if [[ $WANT_NODE -eq 1 ]]; then
+  for dep in third_party/gpuweb third_party/node-api-headers third_party/node-addon-api; do
+    ensure_dep_pinned "$dep"
+  done
 fi
 
 # --- configure ----------------------------------------------------------------
@@ -106,9 +144,7 @@ log "Configuring ($BUILD_DIR)"
 CMAKE_ARGS=(
   -S . -B "$BUILD_DIR" -GNinja
   -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
-  -DDAWN_ENABLE_VULKAN=ON
-  -DDAWN_USE_WAYLAND=ON
-  -DDAWN_USE_X11=ON
+  ${PLATFORM_CMAKE_ARGS[@]+"${PLATFORM_CMAKE_ARGS[@]}"}
   -DDAWN_BUILD_MONOLITHIC_LIBRARY=STATIC
   -DBUILD_SHARED_LIBS=OFF
   -DDAWN_ENABLE_INSTALL=ON
@@ -151,11 +187,25 @@ log "Verifying install"
 [[ -f "$STAGING/lib/libwebgpu_dawn_wire.a" ]]  || die "libwebgpu_dawn_wire.a missing"
 [[ -f "$STAGING/include/dawn/wire/WireServer.h" ]] || die "wire headers missing"
 [[ -f "$STAGING/lib/cmake/Dawn/DawnConfig.cmake" ]] || die "Dawn CMake export missing"
-# wire client bundle must NOT contain native, monolith MUST contain wire server
-if nm "$STAGING/lib/libwebgpu_dawn_wire.a" 2>/dev/null | grep -q 'dawn..native..GetProcs'; then
-  die "libwebgpu_dawn_wire.a unexpectedly contains native Dawn"
+# wire client bundle must NOT contain native, monolith MUST contain wire server.
+# Symbols are matched demangled (nm -C), which also drops the Mach-O leading
+# underscore. nm output goes to a file first so an nm failure is fatal rather
+# than silently passing, and so `grep -q` exiting early can't SIGPIPE nm and
+# trip pipefail.
+NATIVE_SYM='dawn::native::GetProcs()'
+nm_syms() {  # <archive> <outfile>
+  nm -C "$1" > "$2" 2>/dev/null || die "nm failed on $1"
+}
+nm_syms "$STAGING/lib/libwebgpu_dawn_wire.a" "$BUILD_DIR/nm-wire.txt"
+nm_syms "$STAGING/lib/libwebgpu_dawn.a"      "$BUILD_DIR/nm-monolith.txt"
+if grep -qF "$NATIVE_SYM" "$BUILD_DIR/nm-wire.txt"; then
+  die "libwebgpu_dawn_wire.a unexpectedly contains native Dawn ($NATIVE_SYM)"
 fi
-nm "$STAGING/lib/libwebgpu_dawn.a" 2>/dev/null | grep -q 'WireServer' \
+# Positive control: the same pattern must match the native monolith, otherwise
+# the check above is not actually testing anything.
+grep -qF "$NATIVE_SYM" "$BUILD_DIR/nm-monolith.txt" \
+  || die "native-Dawn check is broken: $NATIVE_SYM not found in libwebgpu_dawn.a"
+grep -qF 'dawn::wire::WireServer' "$BUILD_DIR/nm-monolith.txt" \
   || die "libwebgpu_dawn.a missing wire server symbols"
 
 # --- tarball ------------------------------------------------------------------
@@ -165,8 +215,8 @@ ls -lh "$TARBALL"
 
 # --- publish ------------------------------------------------------------------
 if [[ $WANT_PUBLISH -eq 1 ]]; then
-  log "Publishing release $TAG to $RELEASE_REPO"
-  TITLE="Dawn Linux x86_64 Wayland (GCC 15) — wire client/server bundle"
+  log "Publishing $TARBALL to release $TAG on $RELEASE_REPO"
+  TITLE="Dawn ${PLATFORM_DESC} — wire client/server bundle"
   NOTES="$(cat <<EOF
 Wire-enabled Dawn build from \`$(git rev-parse --abbrev-ref HEAD)\` @ ${SHORT}.
 
@@ -181,14 +231,21 @@ Consume via \`find_package(Dawn)\`; link \`dawn::webgpu_dawn\` (GPU process) or
 wire transport classes).
 EOF
 )"
-  gh release create "$TAG" "$TARBALL" \
-    --repo "$RELEASE_REPO" \
-    --title "$TITLE" \
-    --notes "$NOTES"
+  if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+    # Release already exists (e.g. created by the build on another platform):
+    # just attach this platform's tarball, leaving title/notes untouched.
+    gh release upload "$TAG" "$TARBALL" --repo "$RELEASE_REPO"
+  else
+    gh release create "$TAG" "$TARBALL" \
+      --repo "$RELEASE_REPO" \
+      --title "$TITLE" \
+      --notes "$NOTES"
+  fi
   log "Published: https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 else
   log "Built tarball only. To publish:"
-  echo "  gh release create $TAG \"$TARBALL\" --repo $RELEASE_REPO --title '...' --notes '...'"
+  echo "  gh release upload $TAG \"$TARBALL\" --repo $RELEASE_REPO   # existing release"
+  echo "  gh release create $TAG \"$TARBALL\" --repo $RELEASE_REPO --title '...' --notes '...'   # new release"
   echo "  (or re-run with --publish)"
 fi
 
