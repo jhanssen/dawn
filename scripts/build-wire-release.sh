@@ -56,7 +56,14 @@ case "$OS" in
     PLATFORM_DESC="macOS ${ARCH} (Metal)"
     NCPU="$(sysctl -n hw.ncpu)"
     # Metal is Dawn's default backend on macOS; no extra backend flags.
-    PLATFORM_CMAKE_ARGS=()
+    # Pin the deployment target explicitly: Dawn's own default (12.0, in
+    # DawnCompilerPlatformFlags.cmake) is set after project(), when the cache
+    # entry already exists, so it is a no-op and clang falls back to the
+    # *host* macOS version -- the binaries would then require the build
+    # machine's OS. Override with MACOSX_DEPLOYMENT_TARGET.
+    MACOS_MIN="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
+    PLATFORM_DESC="macOS ${ARCH} (Metal, macOS ${MACOS_MIN}+)"
+    PLATFORM_CMAKE_ARGS=( -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" )
     ;;
   *) echo "unsupported OS: $OS" >&2; exit 1 ;;
 esac
@@ -207,6 +214,17 @@ grep -qF "$NATIVE_SYM" "$BUILD_DIR/nm-monolith.txt" \
   || die "native-Dawn check is broken: $NATIVE_SYM not found in libwebgpu_dawn.a"
 grep -qF 'dawn::wire::WireServer' "$BUILD_DIR/nm-monolith.txt" \
   || die "libwebgpu_dawn.a missing wire server symbols"
+# macOS: every object must carry the requested minimum OS, not the host's.
+if [[ "$OS" == Darwin ]]; then
+  bins=( "$STAGING"/lib/*.a )
+  [[ $WANT_NODE -eq 1 ]] && bins+=( "$STAGING/dawn.node" )
+  for bin in "${bins[@]}"; do
+    mins="$(otool -l "$bin" | awk '/LC_BUILD_VERSION/{f=1} f&&$1=="minos"{print $2; f=0}' | sort -u)"
+    [[ -n "$mins" ]] || die "$(basename "$bin"): no LC_BUILD_VERSION minos found"
+    [[ "$mins" == "$MACOS_MIN" ]] \
+      || die "$(basename "$bin") has minos $(echo $mins) (expected $MACOS_MIN)"
+  done
+fi
 
 # --- tarball ------------------------------------------------------------------
 log "Creating tarball"
